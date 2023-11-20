@@ -917,8 +917,6 @@ static EVRCompositorError ivrcompositor_submit_dxvk(
         vktexture.pose = *(VRTextureWithPose_t*)texture;
     else if (flags & Submit_TextureWithDepth)
         vktexture.depth = *(VRTextureWithDepth_t*)texture;
-    else
-        vktexture.texture = *texture;
 
     vktexture.texture = vrclient_translate_texture_dxvk(texture, &vkdata.t, dxvk_surface, &dxvk_device, &image_layout, &image_info);
 
