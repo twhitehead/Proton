@@ -894,10 +894,16 @@ static EVRCompositorError ivrcompositor_submit_dxvk(
         void *linux_side, EVREye eye, Texture_t *texture, VRTextureBounds_t *bounds, EVRSubmitFlags flags,
         unsigned int version, IDXGIVkInteropSurface *dxvk_surface)
 {
-    static const EVRSubmitFlags supported_flags = Submit_LensDistortionAlreadyApplied | Submit_FrameDiscontinuty;
+    static const EVRSubmitFlags supported_flags = Submit_LensDistortionAlreadyApplied | Submit_FrameDiscontinuty |
+        Submit_TextureWithPose | Submit_TextureWithDepth;
     struct VRVulkanTextureArrayData_t vkdata;
     IDXGIVkInteropDevice *dxvk_device;
-    struct Texture_t vktexture;
+    union {
+        struct Texture_t texture;
+        struct VRTextureWithPose_t pose;
+        struct VRTextureWithDepth_t depth;
+        struct VRTextureWithPoseAndDepth_t pose_depth;
+    } vktexture;
 
     VkImageLayout image_layout;
     VkImageCreateInfo image_info;
@@ -905,7 +911,16 @@ static EVRCompositorError ivrcompositor_submit_dxvk(
 
     EVRCompositorError err;
 
-    vktexture = vrclient_translate_texture_dxvk(texture, &vkdata.t, dxvk_surface, &dxvk_device, &image_layout, &image_info);
+    if (flags & Submit_TextureWithPose && flags & Submit_TextureWithDepth)
+        vktexture.pose_depth = *(VRTextureWithPoseAndDepth_t*)texture;
+    else if (flags & Submit_TextureWithPose)
+        vktexture.pose = *(VRTextureWithPose_t*)texture;
+    else if (flags & Submit_TextureWithDepth)
+        vktexture.depth = *(VRTextureWithDepth_t*)texture;
+    else
+        vktexture.texture = *texture;
+
+    vktexture.texture = vrclient_translate_texture_dxvk(texture, &vkdata.t, dxvk_surface, &dxvk_device, &image_layout, &image_info);
 
     compositor_data.dxvk_device = dxvk_device;
 
@@ -930,7 +945,7 @@ static EVRCompositorError ivrcompositor_submit_dxvk(
     dxvk_device->lpVtbl->FlushRenderingCommands(dxvk_device);
     dxvk_device->lpVtbl->LockSubmissionQueue(dxvk_device);
 
-    err = cpp_func(linux_side, eye, &vktexture, bounds, flags);
+    err = cpp_func(linux_side, eye, &vktexture.texture, bounds, flags);
 
     dxvk_device->lpVtbl->ReleaseSubmissionQueue(dxvk_device);
     dxvk_device->lpVtbl->TransitionSurfaceLayout(dxvk_device, dxvk_surface, &subresources,
