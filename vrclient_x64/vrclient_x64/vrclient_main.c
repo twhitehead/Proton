@@ -1041,67 +1041,58 @@ static EVRCompositorError ivrcompositor_submit_vulkan(
         void *linux_side, EVREye eye, Texture_t *texture, VRTextureBounds_t *bounds, EVRSubmitFlags flags,
         unsigned int version)
 {
-    struct VRVulkanTextureData_t our_depth_vkdata, *their_vkdata;
-    struct VRVulkanTextureArrayData_t our_vkdata;
-    VRTextureWithPoseAndDepth_t our_both;
-    VRTextureWithDepth_t our_depth;
-    VRTextureWithPose_t our_pose;
-    Texture_t our_texture;
-    void *tex;
+    struct VRVulkanTextureArrayData_t *depth_vkdata = 0;
+    struct VRVulkanTextureArrayData_t our_vkdata, our_depth_vkdata;
+    union {
+        struct Texture_t texture;
+        struct VRTextureWithPose_t pose;
+        struct VRTextureWithDepth_t depth;
+        struct VRTextureWithPoseAndDepth_t pose_depth;
+    } our_texture;
 
     load_vk_unwrappers();
-
-    their_vkdata = texture->handle;
-
-    memcpy(&our_vkdata, their_vkdata, flags & Submit_VulkanTextureWithArrayData
-            ? sizeof(struct VRVulkanTextureArrayData_t) : sizeof(struct VRVulkanTextureData_t));
-
-    our_vkdata.t.m_pDevice = get_native_VkDevice(our_vkdata.t.m_pDevice);
-    our_vkdata.t.m_pPhysicalDevice = get_native_VkPhysicalDevice(our_vkdata.t.m_pPhysicalDevice);
-    our_vkdata.t.m_pInstance = get_native_VkInstance(our_vkdata.t.m_pInstance);
-    our_vkdata.t.m_pQueue = get_native_VkQueue(our_vkdata.t.m_pQueue);
 
     switch (flags & (Submit_TextureWithPose | Submit_TextureWithDepth))
     {
         case 0:
-            our_texture = *texture;
-            our_texture.handle = &our_vkdata;
-            tex = &our_texture;
+            our_texture.texture = *texture;
             break;
 
         case Submit_TextureWithPose:
-            our_pose = *(VRTextureWithPose_t *)texture;
-            our_pose.texture.handle = &our_vkdata;
-            tex = &our_pose;
+            our_texture.pose = *(VRTextureWithPose_t *)texture;
             break;
 
         case Submit_TextureWithDepth:
-            our_depth = *(VRTextureWithDepth_t *)texture;
-
-            our_depth.texture.handle = &our_vkdata;
-
-            tex = &our_depth;
+            our_texture.depth = *(VRTextureWithDepth_t *)texture;
+            depth_vkdata = our_texture.depth.depth.handle;
+            our_texture.depth.depth.handle = &our_depth_vkdata;
             break;
 
         case Submit_TextureWithPose | Submit_TextureWithDepth:
-            our_both = *(VRTextureWithPoseAndDepth_t *)texture;
-
-            our_both.texture.handle = &our_vkdata;
-
-            their_vkdata = our_both.depth.handle;
-            our_depth_vkdata = *their_vkdata;
-            our_depth_vkdata.m_pDevice = get_native_VkDevice(our_depth_vkdata.m_pDevice);
-            our_depth_vkdata.m_pPhysicalDevice = get_native_VkPhysicalDevice(our_depth_vkdata.m_pPhysicalDevice);
-            our_depth_vkdata.m_pInstance = get_native_VkInstance(our_depth_vkdata.m_pInstance);
-            our_depth_vkdata.m_pQueue = get_native_VkQueue(our_depth_vkdata.m_pQueue);
-
-            our_both.depth.handle = &our_depth_vkdata;
-
-            tex = &our_both;
+            our_texture.pose_depth = *(VRTextureWithPoseAndDepth_t *)texture;
+            depth_vkdata = our_texture.pose_depth.depth.handle;
+            our_texture.pose_depth.depth.handle = &our_depth_vkdata;
             break;
     }
 
-    return cpp_func(linux_side, eye, tex, bounds, flags);
+    if (depth_vkdata) {
+        memcpy(&our_depth_vkdata, depth_vkdata, flags & Submit_VulkanTextureWithArrayData
+                ? sizeof(struct VRVulkanTextureArrayData_t) : sizeof(struct VRVulkanTextureData_t));
+        our_depth_vkdata.t.m_pDevice = get_native_VkDevice(our_depth_vkdata.t.m_pDevice);
+        our_depth_vkdata.t.m_pPhysicalDevice = get_native_VkPhysicalDevice(our_depth_vkdata.t.m_pPhysicalDevice);
+        our_depth_vkdata.t.m_pInstance = get_native_VkInstance(our_depth_vkdata.t.m_pInstance);
+        our_depth_vkdata.t.m_pQueue = get_native_VkQueue(our_depth_vkdata.t.m_pQueue);
+    }
+
+    memcpy(&our_vkdata, texture->handle, flags & Submit_VulkanTextureWithArrayData
+            ? sizeof(struct VRVulkanTextureArrayData_t) : sizeof(struct VRVulkanTextureData_t));
+    our_vkdata.t.m_pDevice = get_native_VkDevice(our_vkdata.t.m_pDevice);
+    our_vkdata.t.m_pPhysicalDevice = get_native_VkPhysicalDevice(our_vkdata.t.m_pPhysicalDevice);
+    our_vkdata.t.m_pInstance = get_native_VkInstance(our_vkdata.t.m_pInstance);
+    our_vkdata.t.m_pQueue = get_native_VkQueue(our_vkdata.t.m_pQueue);
+    our_texture.texture.handle = &our_vkdata;
+
+    return cpp_func(linux_side, eye, &our_texture.texture, bounds, flags);
 }
 
 EVROverlayError ivroverlay_set_overlay_texture(
