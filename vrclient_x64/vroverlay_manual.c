@@ -25,8 +25,11 @@ static void load_overlay_texture_dxvk( const w_Texture_t *texture, struct set_ov
 {
     VkImageCreateInfo image_info;
 
-    state->texture = vrclient_translate_surface_dxvk( texture, &state->vkdata, &state->dxvk_surface,
-            &state->image_layout, &image_info, &state->subresources );
+    state->texture = *texture;
+    state->texture.eType = TextureType_Vulkan;
+    if ( !(state->texture.handle = vrclient_translate_surface_dxvk( state->texture.handle, &state->vkdata,
+                   &state->dxvk_surface, &state->image_layout, &image_info, &state->subresources )) )
+        state->texture = *texture;
 
     compositor_data.dxvk_device->lpVtbl->FlushRenderingCommands( compositor_data.dxvk_device );
     compositor_data.dxvk_device->lpVtbl->LockSubmissionQueue( compositor_data.dxvk_device );

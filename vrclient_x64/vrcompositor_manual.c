@@ -17,32 +17,57 @@ struct submit_state
     {
         w_Texture_t texture;
         w_VRTextureWithPose_t pose;
+        w_VRTextureWithDepth_t depth;
+        w_VRTextureWithPoseAndDepth_t pose_depth;
     } texture;
     union
     {
         w_VRVulkanTextureData_t texture;
         w_VRVulkanTextureArrayData_t array;
-    } vkdata;
-    VkImageLayout image_layout;
-    VkImageSubresourceRange subresources;
-    IDXGIVkInteropSurface *dxvk_surface;
+    } vkdata, vkdata_depth;
+    VkImageLayout image_layout, image_layout_depth;
+    VkImageSubresourceRange subresources, subresources_depth;
+    IDXGIVkInteropSurface *dxvk_surface, *dxvk_surface_depth;
 };
 
 static const w_Texture_t *load_compositor_texture_dxvk( uint32_t eye, const w_Texture_t *texture, uint32_t *flags,
                                                         struct submit_state *state )
 {
     static const uint32_t supported_flags = Submit_LensDistortionAlreadyApplied | Submit_FrameDiscontinuty |
-            Submit_TextureWithPose;
-    VkImageCreateInfo image_info;
+            Submit_TextureWithPose | Submit_TextureWithDepth;
+    VkImageCreateInfo image_info, image_info_depth;
+    void **p_texture_depth_handle = NULL;
+    const w_Texture_t *result = &state->texture.texture;
 
     TRACE( "texture = %p\n", texture );
 
-    state->texture.texture = vrclient_translate_surface_dxvk( texture, &state->vkdata.texture, &state->dxvk_surface,
-            &state->image_layout, &image_info, &state->subresources );
-    if ( *flags & Submit_TextureWithPose )
-        state->texture.pose.mDeviceToAbsoluteTracking = ((w_VRTextureWithPose_t*)texture)->mDeviceToAbsoluteTracking;
-
     if (*flags & ~supported_flags) FIXME( "Unhandled flags %#x.\n", *flags );
+
+    /* The extended pose, depth, and both pose and depth info all have different layouts */
+    switch (*flags & (Submit_TextureWithPose | Submit_TextureWithDepth))
+    {
+    default:
+        state->texture.texture = *texture;
+        break;
+    case Submit_TextureWithPose:
+        state->texture.pose = *(w_VRTextureWithPose_t*)texture;
+        break;
+    case Submit_TextureWithDepth:
+        state->texture.depth = *(w_VRTextureWithDepth_t*)texture;
+        p_texture_depth_handle = &state->texture.depth.depth.handle;
+        break;
+    case Submit_TextureWithPose | Submit_TextureWithDepth:
+        state->texture.pose_depth = *(w_VRTextureWithPoseAndDepth_t*)texture;
+        p_texture_depth_handle = &state->texture.pose_depth.depth.handle;
+        break;
+    }
+
+    /* Handle the texture */
+    state->texture.texture.eType = TextureType_Vulkan;
+    if ( !(state->texture.texture.handle = vrclient_translate_surface_dxvk( state->texture.texture.handle,
+                   &state->vkdata.texture, &state->dxvk_surface, &state->image_layout, &image_info,
+                   &state->subresources )) )
+        result = texture;
 
     if (image_info.arrayLayers > 1)
     {
@@ -51,10 +76,34 @@ static const w_Texture_t *load_compositor_texture_dxvk( uint32_t eye, const w_Te
         *flags = *flags | Submit_VulkanTextureWithArrayData;
     }
 
+    /* Handle the optional depth texture */
+    if (*flags & Submit_TextureWithDepth)
+    {
+        if ( !(*p_texture_depth_handle = vrclient_translate_surface_dxvk( *p_texture_depth_handle,
+                       &state->vkdata_depth.texture, &state->dxvk_surface_depth, &state->image_layout_depth,
+                       &image_info_depth, &state->subresources_depth )) )
+          result = texture;
+
+        if (image_info.arrayLayers > 1 || image_info_depth.arrayLayers > 1)
+        {
+            if (image_info.arrayLayers > 1 && image_info_depth.arrayLayers > 1)
+            {
+                state->vkdata_depth.array.m_unArrayIndex = eye;
+                state->vkdata_depth.array.m_unArraySize = image_info_depth.arrayLayers;
+            }
+            else
+            {
+                ERR( "D3D11 texture and depth texture disagree on being layered.\n" );
+                result = texture;
+            }
+        }
+    }
+
+    /* Flush, and lock the device */
     compositor_data.dxvk_device->lpVtbl->FlushRenderingCommands( compositor_data.dxvk_device );
     compositor_data.dxvk_device->lpVtbl->LockSubmissionQueue( compositor_data.dxvk_device );
 
-    return &state->texture.texture;
+    return result;
 }
 
 static void free_compositor_texture_dxvk( struct submit_state *state )
@@ -70,6 +119,14 @@ static void free_compositor_texture_dxvk( struct submit_state *state )
                 state->dxvk_surface, &state->subresources, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 state->image_layout );
         state->dxvk_surface->lpVtbl->Release( state->dxvk_surface );
+    }
+
+    if (state->dxvk_surface_depth)
+    {
+        compositor_data.dxvk_device->lpVtbl->TransitionSurfaceLayout( compositor_data.dxvk_device,
+                state->dxvk_surface_depth, &state->subresources_depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                state->image_layout_depth );
+        state->dxvk_surface_depth->lpVtbl->Release( state->dxvk_surface_depth );
     }
 }
 
@@ -90,8 +147,11 @@ static const w_Texture_t *set_skybox_override_dxvk_init( const w_Texture_t *text
         VkImageCreateInfo image_info;
         VkImageLayout image_layout;
 
-        state->textures[i] = vrclient_translate_surface_dxvk( textures[i].handle, &state->vkdata[i], &dxvk_surface,
-                &image_layout, &image_info, &subresources );
+        state->textures[i] = textures[i];
+        state->textures[i].eType = TextureType_Vulkan;
+        if ( !(state->textures[i].handle = vrclient_translate_surface_dxvk( state->textures[i].handle,
+                       &state->vkdata[i], &dxvk_surface, &image_layout, &image_info, &subresources )) )
+            state->textures[i] = textures[i];
 
         if ( dxvk_surface )
             dxvk_surface->lpVtbl->Release( dxvk_surface );

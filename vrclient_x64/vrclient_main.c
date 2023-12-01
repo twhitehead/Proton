@@ -330,26 +330,25 @@ static void ivrclientcore_cleanup( struct client_core_data *user_data )
     DeleteCriticalSection(&user_data->critical_section);
 }
 
-w_Texture_t vrclient_translate_surface_dxvk( const w_Texture_t *texture, w_VRVulkanTextureData_t *vkdata,
-                                             IDXGIVkInteropSurface **p_dxvk_surface,
-                                             VkImageLayout *image_layout, VkImageCreateInfo *image_info,
-                                             VkImageSubresourceRange *image_subresources )
+w_VRVulkanTextureData_t *vrclient_translate_surface_dxvk( IUnknown *texture_iface, w_VRVulkanTextureData_t *vkdata,
+                                                          IDXGIVkInteropSurface **p_dxvk_surface,
+                                                          VkImageLayout *image_layout, VkImageCreateInfo *image_info,
+                                                          VkImageSubresourceRange *image_subresources )
 {
-    w_Texture_t vktexture;
     IDXGIVkInteropDevice *dxvk_device;
     VkImage image_handle;
 
-    if (!texture->handle)
+    if (!texture_iface)
     {
         WARN( "No D3D11 texture.\n" );
-        return *texture;
+        return 0;
     }
 
-    if (FAILED(((IUnknown *)texture->handle)->lpVtbl->QueryInterface( texture->handle, &IID_IDXGIVkInteropSurface,
+    if (FAILED(texture_iface->lpVtbl->QueryInterface( texture_iface, &IID_IDXGIVkInteropSurface,
             (void **)p_dxvk_surface )))
     {
-        WARN( "Invalid D3D11 texture %p.\n", texture->handle );
-        return *texture;
+        WARN( "Invalid D3D11 texture %p.\n", texture_iface );
+        return 0;
     }
 
     (*p_dxvk_surface)->lpVtbl->GetDevice(*p_dxvk_surface, &dxvk_device);
@@ -361,7 +360,7 @@ w_Texture_t vrclient_translate_surface_dxvk( const w_Texture_t *texture, w_VRVul
         (*p_dxvk_surface)->lpVtbl->Release( *p_dxvk_surface );
         *p_dxvk_surface = NULL;
         dxvk_device->lpVtbl->Release( dxvk_device );
-        return *texture;
+        return 0;
     }
     else
         dxvk_device->lpVtbl->Release( dxvk_device );
@@ -383,7 +382,15 @@ w_Texture_t vrclient_translate_surface_dxvk( const w_Texture_t *texture, w_VRVul
     vkdata->m_nFormat = image_info->format;
     vkdata->m_nSampleCount = image_info->samples;
 
-    image_subresources->aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    image_subresources->aspectMask =
+      ( image_info->format == VK_FORMAT_X8_D24_UNORM_PACK32 ||
+        image_info->format == VK_FORMAT_D32_SFLOAT ) ? VK_IMAGE_ASPECT_DEPTH_BIT :
+      ( image_info->format == VK_FORMAT_S8_UINT ) ? VK_IMAGE_ASPECT_STENCIL_BIT :
+      ( image_info->format == VK_FORMAT_D16_UNORM_S8_UINT ||
+        image_info->format == VK_FORMAT_D24_UNORM_S8_UINT ||
+        image_info->format == VK_FORMAT_D32_SFLOAT_S8_UINT ) ?
+      VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT :
+      VK_IMAGE_ASPECT_COLOR_BIT;
     image_subresources->baseMipLevel = 0;
     image_subresources->levelCount = image_info->mipLevels;
     image_subresources->baseArrayLayer = 0;
@@ -392,11 +399,7 @@ w_Texture_t vrclient_translate_surface_dxvk( const w_Texture_t *texture, w_VRVul
     compositor_data.dxvk_device->lpVtbl->TransitionSurfaceLayout( compositor_data.dxvk_device, *p_dxvk_surface,
             image_subresources, *image_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
 
-    vktexture = *texture;
-    vktexture.handle = vkdata;
-    vktexture.eType = TextureType_Vulkan;
-
-    return vktexture;
+    return vkdata;
 }
 
 uint32_t __thiscall winIVRClientCore_IVRClientCore_002_Init( struct w_steam_iface *_this, uint32_t eApplicationType )
