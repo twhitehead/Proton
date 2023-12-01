@@ -75,9 +75,10 @@ struct generic_interface
 };
 
 #ifdef __dxvk_interop_h__
-extern w_Texture_t vrclient_translate_texture_dxvk( const w_Texture_t *texture, w_VRVulkanTextureData_t *vkdata,
-                                                    IDXGIVkInteropSurface *dxvk_surface, IDXGIVkInteropDevice **p_dxvk_device,
-                                                    VkImageLayout *image_layout, VkImageCreateInfo *image_info );
+extern w_Texture_t vrclient_translate_surface_dxvk( const w_Texture_t *texture, w_VRVulkanTextureData_t *vkdata,
+                                                    IDXGIVkInteropSurface **p_dxvk_surface,
+                                                    VkImageLayout *image_layout, VkImageCreateInfo *image_info,
+                                                    VkImageSubresourceRange *image_subresource);
 #endif /* __dxvk_interop_h__ */
 
 #include "vrclient_generated.h"

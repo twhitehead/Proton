@@ -19,52 +19,31 @@ struct set_overlay_texture_state
     VkImageLayout image_layout;
     VkImageSubresourceRange subresources;
     IDXGIVkInteropSurface *dxvk_surface;
-    IDXGIVkInteropDevice *dxvk_device;
 };
 
 static void load_overlay_texture_dxvk( const w_Texture_t *texture, struct set_overlay_texture_state *state )
 {
     VkImageCreateInfo image_info;
-    IUnknown *texture_iface;
 
-    TRACE( "texture = %p\n", texture );
+    state->texture = vrclient_translate_surface_dxvk( texture, &state->vkdata, &state->dxvk_surface,
+            &state->image_layout, &image_info, &state->subresources );
 
-    if (!(texture_iface = texture->handle))
-    {
-        WARN( "No D3D11 texture %p.\n", texture );
-        return;
-    }
-
-    if (FAILED(texture_iface->lpVtbl->QueryInterface( texture_iface, &IID_IDXGIVkInteropSurface,
-                                                      (void **)&state->dxvk_surface )))
-    {
-        WARN( "Invalid D3D11 texture %p.\n", texture );
-        return;
-    }
-
-    state->texture = vrclient_translate_texture_dxvk( texture, &state->vkdata, state->dxvk_surface, &state->dxvk_device,
-                                                      &state->image_layout, &image_info );
-    state->subresources.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    state->subresources.baseMipLevel = 0;
-    state->subresources.levelCount = image_info.mipLevels;
-    state->subresources.baseArrayLayer = 0;
-    state->subresources.layerCount = image_info.arrayLayers;
-
-    state->dxvk_device->lpVtbl->TransitionSurfaceLayout( state->dxvk_device, state->dxvk_surface, &state->subresources,
-                                                         state->image_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
-    state->dxvk_device->lpVtbl->FlushRenderingCommands( state->dxvk_device );
-    state->dxvk_device->lpVtbl->LockSubmissionQueue( state->dxvk_device );
+    compositor_data.dxvk_device->lpVtbl->FlushRenderingCommands( compositor_data.dxvk_device );
+    compositor_data.dxvk_device->lpVtbl->LockSubmissionQueue( compositor_data.dxvk_device );
 }
 
 static void free_unix_overlay_texture_dxvk( struct set_overlay_texture_state *state )
 {
-    if (!state->dxvk_device) return;
+    if (!compositor_data.dxvk_device) return;
 
-    state->dxvk_device->lpVtbl->ReleaseSubmissionQueue( state->dxvk_device );
-    state->dxvk_device->lpVtbl->TransitionSurfaceLayout( state->dxvk_device, state->dxvk_surface, &state->subresources,
-                                                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, state->image_layout );
-    state->dxvk_device->lpVtbl->Release( state->dxvk_device );
-    state->dxvk_surface->lpVtbl->Release( state->dxvk_surface );
+    compositor_data.dxvk_device->lpVtbl->ReleaseSubmissionQueue( compositor_data.dxvk_device );
+
+    if (state->dxvk_surface)
+    {
+        compositor_data.dxvk_device->lpVtbl->TransitionSurfaceLayout( compositor_data.dxvk_device, state->dxvk_surface,
+                &state->subresources, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, state->image_layout );
+        state->dxvk_surface->lpVtbl->Release( state->dxvk_surface );
+    }
 }
 
 uint32_t __thiscall winIVROverlay_IVROverlay_001_SetOverlayTexture( struct w_steam_iface *_this,

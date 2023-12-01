@@ -18,11 +18,14 @@ struct submit_state
         w_Texture_t texture;
         w_VRTextureWithPose_t pose;
     } texture;
-    w_VRVulkanTextureArrayData_t vkdata;
+    union
+    {
+        w_VRVulkanTextureData_t texture;
+        w_VRVulkanTextureArrayData_t array;
+    } vkdata;
     VkImageLayout image_layout;
     VkImageSubresourceRange subresources;
     IDXGIVkInteropSurface *dxvk_surface;
-    IDXGIVkInteropDevice *dxvk_device;
 };
 
 static const w_Texture_t *load_compositor_texture_dxvk( uint32_t eye, const w_Texture_t *texture, uint32_t *flags,
@@ -30,77 +33,44 @@ static const w_Texture_t *load_compositor_texture_dxvk( uint32_t eye, const w_Te
 {
     static const uint32_t supported_flags = Submit_LensDistortionAlreadyApplied | Submit_FrameDiscontinuty |
             Submit_TextureWithPose;
-    w_VRVulkanTextureData_t vkdata;
     VkImageCreateInfo image_info;
-    IUnknown *texture_iface;
 
     TRACE( "texture = %p\n", texture );
 
-    if (!(texture_iface = texture->handle))
-    {
-        WARN( "No D3D11 texture %p.\n", texture );
-        return texture;
-    }
-
-    if (FAILED(texture_iface->lpVtbl->QueryInterface( texture_iface, &IID_IDXGIVkInteropSurface,
-                                                      (void **)&state->dxvk_surface )))
-    {
-        WARN( "Invalid D3D11 texture %p.\n", texture );
-        return texture;
-    }
-
-    state->texture.texture = vrclient_translate_texture_dxvk( texture, &vkdata, state->dxvk_surface,
-            &state->dxvk_device, &state->image_layout, &image_info );
-
-    state->vkdata.m_nImage = vkdata.m_nImage;
-    state->vkdata.m_pDevice = vkdata.m_pDevice;
-    state->vkdata.m_pPhysicalDevice = vkdata.m_pPhysicalDevice;
-    state->vkdata.m_pInstance = vkdata.m_pInstance;
-    state->vkdata.m_pQueue = vkdata.m_pQueue;
-    state->vkdata.m_nQueueFamilyIndex = vkdata.m_nQueueFamilyIndex;
-    state->vkdata.m_nWidth = vkdata.m_nWidth;
-    state->vkdata.m_nHeight = vkdata.m_nHeight;
-    state->vkdata.m_nFormat = vkdata.m_nFormat;
-    state->vkdata.m_nSampleCount = vkdata.m_nSampleCount;
-    state->texture.texture.handle = &state->vkdata;
-
+    state->texture.texture = vrclient_translate_surface_dxvk( texture, &state->vkdata.texture, &state->dxvk_surface,
+            &state->image_layout, &image_info, &state->subresources );
     if ( *flags & Submit_TextureWithPose )
         state->texture.pose.mDeviceToAbsoluteTracking = ((w_VRTextureWithPose_t*)texture)->mDeviceToAbsoluteTracking;
-
-    compositor_data.dxvk_device = state->dxvk_device;
 
     if (*flags & ~supported_flags) FIXME( "Unhandled flags %#x.\n", *flags );
 
     if (image_info.arrayLayers > 1)
     {
-        state->vkdata.m_unArrayIndex = eye;
-        state->vkdata.m_unArraySize = image_info.arrayLayers;
+        state->vkdata.array.m_unArrayIndex = eye;
+        state->vkdata.array.m_unArraySize = image_info.arrayLayers;
         *flags = *flags | Submit_VulkanTextureWithArrayData;
     }
 
-    state->subresources.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    state->subresources.baseMipLevel = 0;
-    state->subresources.levelCount = image_info.mipLevels;
-    state->subresources.baseArrayLayer = 0;
-    state->subresources.layerCount = image_info.arrayLayers;
-
-    state->dxvk_device->lpVtbl->TransitionSurfaceLayout( state->dxvk_device, state->dxvk_surface, &state->subresources,
-                                                         state->image_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
-    state->dxvk_device->lpVtbl->FlushRenderingCommands( state->dxvk_device );
-    state->dxvk_device->lpVtbl->LockSubmissionQueue( state->dxvk_device );
+    compositor_data.dxvk_device->lpVtbl->FlushRenderingCommands( compositor_data.dxvk_device );
+    compositor_data.dxvk_device->lpVtbl->LockSubmissionQueue( compositor_data.dxvk_device );
 
     return &state->texture.texture;
 }
 
 static void free_compositor_texture_dxvk( struct submit_state *state )
 {
-    if (!state->dxvk_device) return;
+    if (!compositor_data.dxvk_device)
+        return;
 
-    state->dxvk_device->lpVtbl->ReleaseSubmissionQueue( state->dxvk_device );
-    state->dxvk_device->lpVtbl->TransitionSurfaceLayout( state->dxvk_device, state->dxvk_surface, &state->subresources,
-                                                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, state->image_layout );
-    state->dxvk_device->lpVtbl->Release( state->dxvk_device );
-    state->dxvk_surface->lpVtbl->Release( state->dxvk_surface );
+    compositor_data.dxvk_device->lpVtbl->ReleaseSubmissionQueue( compositor_data.dxvk_device );
+
+    if (state->dxvk_surface)
+    {
+        compositor_data.dxvk_device->lpVtbl->TransitionSurfaceLayout( compositor_data.dxvk_device,
+                state->dxvk_surface, &state->subresources, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                state->image_layout );
+        state->dxvk_surface->lpVtbl->Release( state->dxvk_surface );
+    }
 }
 
 struct set_skybox_override_state
@@ -109,63 +79,22 @@ struct set_skybox_override_state
     w_VRVulkanTextureData_t vkdata[6];
 };
 
-static const w_Texture_t *set_skybox_override_d3d11_init( const w_Texture_t *textures, uint32_t count, struct set_skybox_override_state *state )
+static const w_Texture_t *set_skybox_override_dxvk_init( const w_Texture_t *textures, uint32_t count, struct set_skybox_override_state *state )
 {
     IDXGIVkInteropSurface *dxvk_surface;
     unsigned int i;
 
     for (i = 0; i < count; ++i)
     {
-        const w_Texture_t *texture = &textures[i];
         VkImageSubresourceRange subresources;
-        IDXGIVkInteropDevice *dxvk_device;
         VkImageCreateInfo image_info;
         VkImageLayout image_layout;
-        IUnknown *texture_iface;
 
-        if (!texture->handle)
-        {
-            ERR( "No D3D11 texture %p.\n", texture );
-            return textures;
-        }
-        if (textures[i].eType != TextureType_DirectX)
-        {
-            FIXME( "Mixing texture types is not supported.\n" );
-            return textures;
-        }
+        state->textures[i] = vrclient_translate_surface_dxvk( textures[i].handle, &state->vkdata[i], &dxvk_surface,
+                &image_layout, &image_info, &subresources );
 
-        texture_iface = texture->handle;
-
-        if (FAILED(texture_iface->lpVtbl->QueryInterface( texture_iface, &IID_IDXGIVkInteropSurface,
-                                                          (void **)&dxvk_surface )))
-        {
-            FIXME( "Unsupported d3d11 texture %p, i %u.\n", texture, i );
-            return textures;
-        }
-
-        state->textures[i] = vrclient_translate_texture_dxvk( texture, &state->vkdata[i], dxvk_surface,
-                                                              &dxvk_device, &image_layout, &image_info );
-        if (compositor_data.dxvk_device && dxvk_device != compositor_data.dxvk_device)
-        {
-            ERR( "Invalid dxvk_device %p, previous %p.\n", dxvk_device, compositor_data.dxvk_device );
+        if ( dxvk_surface )
             dxvk_surface->lpVtbl->Release( dxvk_surface );
-            dxvk_device->lpVtbl->Release( dxvk_device );
-            return textures;
-        }
-
-        compositor_data.dxvk_device = dxvk_device;
-
-        subresources.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        subresources.baseMipLevel = 0;
-        subresources.levelCount = image_info.mipLevels;
-        subresources.baseArrayLayer = 0;
-        subresources.layerCount = image_info.arrayLayers;
-
-        dxvk_device->lpVtbl->TransitionSurfaceLayout( dxvk_device, dxvk_surface, &subresources, image_layout,
-                                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL );
-
-        dxvk_surface->lpVtbl->Release( dxvk_surface );
-        dxvk_device->lpVtbl->Release( dxvk_device );
     }
 
     compositor_data.dxvk_device->lpVtbl->FlushRenderingCommands( compositor_data.dxvk_device );
@@ -195,7 +124,7 @@ static const w_Texture_t *set_skybox_override_init( const w_Texture_t *textures,
 static void set_skybox_override_done( const w_Texture_t *textures, uint32_t count )
 {
     if (!count || count > 6) return;
-    while (count--) if (!textures[count].handle || textures[count].eType != TextureType_DirectX) return;
+    while (count--) if (textures[count].eType != TextureType_DirectX) return;
     compositor_data.dxvk_device->lpVtbl->ReleaseSubmissionQueue( compositor_data.dxvk_device );
 }
 
