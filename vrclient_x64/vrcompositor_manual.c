@@ -176,17 +176,20 @@ static const w_Texture_t *set_skybox_override_d3d11_init( const w_Texture_t *tex
 
 static const w_Texture_t *set_skybox_override_init( const w_Texture_t *textures, uint32_t count, struct set_skybox_override_state *state )
 {
+    unsigned int i;
+
     if (!count || count > 6)
     {
         WARN( "Invalid texture count %u.\n", count );
         return textures;
     }
 
-    if (textures[0].eType == TextureType_DirectX)
-        return set_skybox_override_d3d11_init( textures, count, state );
+    for (i = 0; i<count; ++i) if (textures[i].eType != TextureType_DirectX) {
+        FIXME( "Conversion for type %u is not supported.\n", textures[0].eType );
+        return textures;
+    }
 
-    FIXME( "Conversion for type %u is not supported.\n", textures[0].eType );
-    return textures;
+    return set_skybox_override_dxvk_init( textures, count, state );
 }
 
 static void set_skybox_override_done( const w_Texture_t *textures, uint32_t count )
